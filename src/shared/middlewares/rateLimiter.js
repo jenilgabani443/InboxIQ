@@ -20,22 +20,25 @@ const createRateLimiter = ({
   windowMs = env.RATE_LIMIT_WINDOW_MS,
   max = env.RATE_LIMIT_MAX,
   message = 'Too many requests, please try again later.',
-} = {}) =>
-  rateLimit({
+} = {}) => {
+  if (process.env.NODE_ENV === 'test') {
+    return (_req, _res, next) => next();
+  }
+  
+  return rateLimit({
     windowMs,
     max,
     standardHeaders: true,   // Return rate limit info in RateLimit-* headers
     legacyHeaders: false,     // Disable X-RateLimit-* headers
-    ...(process.env.NODE_ENV !== 'test' && {
-      store: new RedisStore({
-        sendCommand: (...args) => getRedisClient().call(...args),
-        prefix: 'rl:',
-      }),
+    store: new RedisStore({
+      sendCommand: (...args) => getRedisClient().call(...args),
+      prefix: 'rl:',
     }),
     handler: (_req, _res, next) => {
       next(ApiError.tooManyRequests(message));
     },
   });
+};
 
 // Pre-configured limiters for common use cases
 const globalLimiter = createRateLimiter();

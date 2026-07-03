@@ -7,6 +7,7 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
+const mongoose = require('mongoose');
 
 const authenticate = require('../../shared/middlewares/authenticate');
 const validate = require('../../shared/middlewares/validate');
@@ -18,11 +19,13 @@ const { emitToUser } = require('../../config/socket');
 const EVENTS = require('../../shared/constants/events');
 
 const Email = require('./email.model');
+const User = require('../user/user.model');
 const Thread = require('../thread/thread.model');
 const { EMAIL_STATUS, EMAIL_FOLDER } = require('../../shared/constants/emailStatus');
-const { searchEmailsSchema } = require('./email.validator');
+const { searchEmailsSchema, bulkOperationsSchema } = require('./email.validator');
 const emailService = require('./email.service');
 const searchService = require('../search/search.service');
+const { emailQueue, snoozeQueue, filterQueue } = require('../../config/queue');
 
 // All email routes require authentication
 router.use(authenticate);
@@ -99,7 +102,15 @@ router.get(
  *   post:
  *     tags:
  *       - Emails
- *     summary: Compose and send (or save draft) an email
+ *     summary: Compose, send, schedule (or save draft) an email
+ *     description: |
+ *       Creates an email. Behaviour depends on the provided fields:
+ *       - `status: 'draft'` (default) — saves as a draft
+ *       - `status: 'sent'` — immediately marks as sent; an undo window is applied
+ *         based on the user's `preferences.undoSendSeconds` setting (default 10s)
+ *       - `scheduledAt` provided — sets `status: 'scheduled'` and enqueues a
+ *         background job that transitions the email to `sent` at the specified time.
+ *         `scheduledAt` must be a future ISO 8601 date and no more than 1 year ahead.
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -129,11 +140,17 @@ router.get(
  *                 enum:
  *                   - draft
  *                   - sent
+ *                 description: Ignored when scheduledAt is provided
+ *               scheduledAt:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Future ISO date to schedule delivery. Must be within 1 year.
+ *                 example: "2026-12-01T09:00:00.000Z"
  *     responses:
  *       201:
- *         description: Email created successfully
+ *         description: Email created successfully (draft, sent, or scheduled)
  *       400:
- *         description: Invalid request
+ *         description: Invalid request or scheduledAt validation failure
  *       401:
  *         description: Unauthorized
  */
@@ -158,8 +175,25 @@ router.post(
       });
     }
 
-    const undoSeconds = 10; // TODO: read from user.preferences.undoSendSeconds
+    // Read undo-send window from user preferences (default: 10s if not set)
+    const sender = await User.findById(req.user.id).select('preferences').lean();
+    const undoSeconds = sender?.preferences?.undoSendSeconds ?? 10;
     const undoExpiry = status === EMAIL_STATUS.SENT ? new Date(Date.now() + undoSeconds * 1000) : null;
+
+    // Validate scheduledAt: must be a future date
+    if (scheduledAt) {
+      const schedDate = new Date(scheduledAt);
+      if (isNaN(schedDate.getTime())) {
+        throw ApiError.badRequest('scheduledAt must be a valid ISO date string');
+      }
+      if (schedDate <= new Date()) {
+        throw ApiError.badRequest('scheduledAt must be a future date');
+      }
+      const oneYearFromNow = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000);
+      if (schedDate > oneYearFromNow) {
+        throw ApiError.badRequest('scheduledAt cannot be more than 1 year in the future');
+      }
+    }
 
     const email = await Email.create({
       threadId: thread._id,
@@ -173,8 +207,8 @@ router.post(
       bodyText: bodyText || '',
       attachments: attachments || [],
       status: scheduledAt ? EMAIL_STATUS.SCHEDULED : status,
-      folder: status === EMAIL_STATUS.SENT ? EMAIL_FOLDER.SENT : EMAIL_FOLDER.DRAFTS,
-      scheduledAt: scheduledAt || null,
+      folder: scheduledAt ? EMAIL_FOLDER.DRAFTS : (status === EMAIL_STATUS.SENT ? EMAIL_FOLDER.SENT : EMAIL_FOLDER.DRAFTS),
+      scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
       sentAt: status === EMAIL_STATUS.SENT ? new Date() : null,
       undoExpiry,
     });
@@ -186,21 +220,192 @@ router.post(
       lastEmailAt: new Date(),
     });
 
-    // Emit real-time event to recipients
-    if (status === EMAIL_STATUS.SENT && to?.length) {
-      to.forEach(({ email: recipientEmail }) => {
-        emitToUser(recipientEmail, EVENTS.NEW_EMAIL, {
-          emailId: email._id,
-          from: user,
-          subject,
-          snippet: email.snippet,
-          sentAt: email.sentAt,
-        });
-      });
+    // Schedule Bull job for delayed delivery
+    if (scheduledAt) {
+      const delay = new Date(scheduledAt).getTime() - Date.now();
+      await emailQueue.add(
+        'send_scheduled_email',
+        { emailId: email._id.toString(), userId: req.user.id },
+        {
+          delay,
+          attempts: 3,
+          backoff: { type: 'exponential', delay: 5000 },
+          jobId: `scheduled:${email._id}`,
+          removeOnComplete: 20,
+          removeOnFail: 50,
+        },
+      );
     }
+
+    // Emit real-time event to recipients (for immediately sent emails only)
+    // Wrapped in try/catch — Socket.IO is not available in test environment.
+    if (status === EMAIL_STATUS.SENT && !scheduledAt && to?.length) {
+      try {
+        to.forEach(({ email: recipientEmail }) => {
+          emitToUser(recipientEmail, EVENTS.NEW_EMAIL, {
+            emailId: email._id,
+            from: user,
+            subject,
+            snippet: email.snippet,
+            sentAt: email.sentAt,
+          });
+        });
+      } catch (_socketErr) {
+        // Non-fatal — socket may not be available in test / worker-only contexts
+      }
+    }
+
+    // Schedule Bull job to apply user filters to this new email
+    await filterQueue.add(
+      'apply_filters',
+      { emailId: email._id.toString(), userId: req.user.id },
+      {
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 2000 },
+        removeOnComplete: 20,
+        removeOnFail: 50,
+      }
+    );
 
     return ApiResponse.created(res, 'Email created', email);
   }),
+);
+
+/**
+ * @swagger
+ * /emails/bulk:
+ *   patch:
+ *     tags:
+ *       - Emails
+ *     summary: Perform bulk operations on emails
+ *     description: |
+ *       Perform bulk operations on multiple emails at once.
+ *       Supported operations:
+ *       - `markRead` / `markUnread`
+ *       - `archive`
+ *       - `trash` (Moves to trash. If already in trash, permanently deletes)
+ *       - `restore` (Moves from trash to inbox)
+ *       - `applyLabels` / `removeLabels` (Requires `labels` array)
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - emailIds
+ *               - operation
+ *             properties:
+ *               emailIds:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *               operation:
+ *                 type: string
+ *                 enum: [markRead, markUnread, archive, trash, restore, applyLabels, removeLabels]
+ *               labels:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Required for applyLabels and removeLabels operations
+ *     responses:
+ *       200:
+ *         description: Bulk operation completed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ApiResponse'
+ *       400:
+ *         description: Invalid request payload
+ *       401:
+ *         description: Unauthorized
+ */
+router.patch(
+  '/bulk',
+  validate(bulkOperationsSchema),
+  asyncHandler(async (req, res) => {
+    const { emailIds, operation, labels } = req.body;
+    const userId = req.user.id;
+
+    // Filter out invalid ObjectIds to prevent cast errors
+    const validIds = emailIds.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length === 0) {
+      return ApiResponse.ok(res, 'Bulk operation completed', { successful: 0, failed: emailIds.length });
+    }
+
+    const query = { _id: { $in: validIds }, 'from.userId': userId };
+    let result = { modifiedCount: 0 };
+    let resultSecondary = { modifiedCount: 0 };
+
+    switch (operation) {
+      case 'markRead':
+        result = await Email.updateMany(query, { isRead: true, readAt: new Date() });
+        break;
+      case 'markUnread':
+        result = await Email.updateMany(query, { isRead: false, readAt: null });
+        break;
+      case 'archive':
+        result = await Email.updateMany(
+          { ...query, folder: { $nin: [EMAIL_FOLDER.ARCHIVE, EMAIL_FOLDER.TRASH] } },
+          { folder: EMAIL_FOLDER.ARCHIVE }
+        );
+        break;
+      case 'restore':
+        result = await Email.updateMany(
+          { ...query, folder: EMAIL_FOLDER.TRASH },
+          { folder: EMAIL_FOLDER.INBOX }
+        );
+        break;
+      case 'trash':
+        // 1. Permanently delete (soft delete) those already in TRASH
+        resultSecondary = await Email.updateMany(
+          { ...query, folder: EMAIL_FOLDER.TRASH },
+          { isDeleted: true, deletedAt: new Date() }
+        );
+        // 2. Move others to TRASH
+        result = await Email.updateMany(
+          { ...query, folder: { $ne: EMAIL_FOLDER.TRASH } },
+          { folder: EMAIL_FOLDER.TRASH }
+        );
+        break;
+      case 'applyLabels':
+        result = await Email.updateMany(query, { $addToSet: { labels: { $each: labels } } });
+        break;
+      case 'removeLabels':
+        result = await Email.updateMany(query, { $pullAll: { labels } });
+        break;
+    }
+
+    const totalModified = result.modifiedCount + (resultSecondary.modifiedCount || 0);
+
+    // After bulk update, emit real-time events to sync client (best-effort)
+    try {
+      const updatedEmails = await Email.find(query).select('folder isRead isStarred labels').lean();
+      updatedEmails.forEach(email => {
+        emitToUser(userId, EVENTS.EMAIL_UPDATED, {
+          emailId: email._id,
+          folder: email.folder,
+          isRead: email.isRead,
+          isStarred: email.isStarred,
+          labels: email.labels,
+        });
+      });
+    } catch (err) {
+      // Ignore socket errors
+    }
+
+    // Determine successful and failed counts using MongoDB update result
+    const successful = (result.matchedCount || 0) + (resultSecondary.matchedCount || 0);
+    const failed = emailIds.length - successful;
+
+    return ApiResponse.ok(res, 'Bulk operation completed', {
+      successful,
+      failed,
+      modified: totalModified,
+    });
+  })
 );
 
 /**
@@ -775,6 +980,11 @@ router.patch(
  *     tags:
  *       - Emails
  *     summary: Snooze an email until a future time
+ *     description: |
+ *       Hides the email from the inbox until the specified time. When the snooze
+ *       expires, a background job restores the email to the inbox and creates an
+ *       in-app notification. Re-snoozing an already-snoozed email replaces the
+ *       existing job (only one active snooze job per email at a time).
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -796,16 +1006,17 @@ router.patch(
  *               snoozeUntil:
  *                 type: string
  *                 format: date-time
+ *                 description: Future ISO date when the email should return to inbox
  *                 example: "2026-07-10T10:30:00.000Z"
  *     responses:
  *       200:
- *         description: Email snoozed successfully
+ *         description: Email snoozed successfully — background job scheduled
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ApiResponse'
  *       400:
- *         description: Invalid snooze date
+ *         description: Invalid snooze date (not a future date)
  *       401:
  *         description: Unauthorized
  *       404:
@@ -818,6 +1029,7 @@ router.patch(
     if (!snoozeUntil) throw ApiError.badRequest('snoozeUntil is required');
 
     const snoozeDate = new Date(snoozeUntil);
+    if (isNaN(snoozeDate.getTime())) throw ApiError.badRequest('snoozeUntil must be a valid ISO date string');
     if (snoozeDate <= new Date()) throw ApiError.badRequest('snoozeUntil must be in the future');
 
     const email = await Email.findOneAndUpdate(
@@ -827,7 +1039,23 @@ router.patch(
     );
     if (!email) throw ApiError.notFound('Email not found');
 
-    // TODO: Schedule Bull snooze job
+    // Schedule Bull snooze job — fires when snoozeUntil is reached.
+    // jobId 'snooze:{emailId}' ensures only one active snooze job per email.
+    // Re-snoozing replaces the old waiting job automatically via Bull deduplication.
+    const delay = snoozeDate.getTime() - Date.now();
+    await snoozeQueue.add(
+      'process_snooze',
+      { emailId: email._id.toString(), userId: req.user.id },
+      {
+        delay,
+        attempts: 2,
+        backoff: { type: 'fixed', delay: 10000 },
+        jobId: `snooze:${email._id}`,
+        removeOnComplete: 10,
+        removeOnFail: 20,
+      },
+    );
+
     return ApiResponse.ok(res, 'Email snoozed', { snoozeUntil: email.snoozeUntil });
   }),
 );

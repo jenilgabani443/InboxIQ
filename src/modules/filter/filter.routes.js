@@ -56,11 +56,15 @@ router.get(
  *           schema:
  *             type: object
  *             example:
- *               name: Work Emails
+ *               name: Important Project Emails
  *               conditions:
  *                 from: boss@example.com
+ *                 subject: Project
+ *                 hasAttachment: true
  *               actions:
- *                 moveToFolder: inbox
+ *                 markRead: true
+ *                 star: true
+ *                 archive: true
  *     responses:
  *       201:
  *         description: Filter created successfully.

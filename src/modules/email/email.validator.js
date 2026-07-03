@@ -97,4 +97,25 @@ const searchEmailsSchema = z.object({
     ),
 });
 
-module.exports = { searchEmailsSchema };
+// ── Bulk Operations Schema ─────────────────────────────────────────────────────
+
+const bulkOperationsSchema = z.object({
+  body: z.object({
+    emailIds: z.array(z.string()).min(1, 'At least one email ID is required'),
+    operation: z.enum(
+      ['markRead', 'markUnread', 'archive', 'trash', 'restore', 'applyLabels', 'removeLabels'],
+      { errorMap: () => ({ message: 'Invalid operation' }) }
+    ),
+    labels: z.array(z.string()).optional(),
+  }).refine(
+    (data) => {
+      if ((data.operation === 'applyLabels' || data.operation === 'removeLabels') && (!data.labels || data.labels.length === 0)) {
+        return false;
+      }
+      return true;
+    },
+    { message: 'Labels array is required for label operations', path: ['labels'] }
+  ),
+});
+
+module.exports = { searchEmailsSchema, bulkOperationsSchema };

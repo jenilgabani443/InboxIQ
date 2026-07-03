@@ -9,6 +9,8 @@ const { connectDB } = require('./config/db');
 const { connectRedis } = require('./config/redis');
 const { initSocket } = require('./config/socket');
 const { verifyCloudinaryConfig } = require('./config/cloudinary');
+const { startWorkers } = require('./modules/jobs/job.worker');
+const { closeQueues } = require('./config/queue');
 const logger = require('./shared/utils/logger');
 const env = require('./config/env');
 
@@ -47,7 +49,10 @@ const bootstrap = async () => {
     // 6. Initialize Socket.IO
     initSocket(httpServer);
 
-    // 7. Start listening
+    // 7. Start Bull queue workers
+    startWorkers();
+
+    // 8. Start listening
     httpServer.listen(env.PORT, () => {
       logger.info(`🚀 InboxIQ API running on port ${env.PORT}`);
       logger.info(`📚 Swagger UI: http://localhost:${env.PORT}/api-docs`);
@@ -64,6 +69,7 @@ const bootstrap = async () => {
         const { disconnectDB } = require('./config/db');
         const { disconnectRedis } = require('./config/redis');
 
+        await closeQueues();
         await disconnectDB();
         await disconnectRedis();
 
