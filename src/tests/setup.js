@@ -5,11 +5,18 @@ process.env.NODE_ENV = 'test';
 process.env.BCRYPT_ROUNDS = '4'; // Fast hashing in tests
 
 const mongoose = require('mongoose');
-const env = require('../config/env');
+const { MongoMemoryServer } = require('mongodb-memory-server');
 
 module.exports = async () => {
-  await mongoose.connect(env.MONGO_TEST_URI || env.MONGO_URI);
-  // Clean test DB before suite
+  // Start in-memory MongoDB instance
+  const mongod = await MongoMemoryServer.create();
+  const uri = mongod.getUri();
+  
+  // Expose it to the test runners via env var (passed to workers)
+  process.env.MONGO_TEST_URI = uri;
+  global.__MONGOD__ = mongod;
+
+  // Connect mongoose in the global setup context (optional, but good for initial DB creation/indexes)
+  await mongoose.connect(uri);
   await mongoose.connection.dropDatabase();
-  global.__MONGO_URI__ = env.MONGO_TEST_URI || env.MONGO_URI;
 };

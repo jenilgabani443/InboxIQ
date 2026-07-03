@@ -28,6 +28,7 @@ const filterRoutes = require('./modules/filter/filter.routes');
 const notificationRoutes = require('./modules/notification/notification.routes');
 const aiRoutes = require('./modules/ai/ai.routes');
 const healthRoutes = require('./modules/health/health.routes');
+const searchRoutes = require('./modules/search/search.routes');
 
 /**
  * Express Application Factory.
@@ -117,6 +118,7 @@ const createApp = () => {
   apiRouter.use('/notifications', notificationRoutes);
   apiRouter.use('/ai', aiRoutes);
   apiRouter.use('/health', healthRoutes);
+  apiRouter.use('/search', searchRoutes);
   app.use(`/api/${env.API_VERSION}`, apiRouter);
 
   // ── 404 Handler ───────────────────────────────────────────────────────────

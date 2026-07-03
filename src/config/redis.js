@@ -1,6 +1,6 @@
 'use strict';
 
-const Redis = require('ioredis');
+const Redis = process.env.NODE_ENV === 'test' ? require('ioredis-mock') : require('ioredis');
 const logger = require('../shared/utils/logger');
 const env = require('./env');
 

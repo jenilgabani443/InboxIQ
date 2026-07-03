@@ -16,6 +16,8 @@ const contactSchema = new mongoose.Schema(
 
 contactSchema.index({ userId: 1, email: 1 }, { unique: true });
 contactSchema.index({ userId: 1, emailCount: -1 }); // for sorted autocomplete
+// Phase 4: three-tier autocomplete ranking index — most contacted → most recent → alphabetical
+contactSchema.index({ userId: 1, emailCount: -1, lastContactedAt: -1, name: 1 });
 
 const Contact = mongoose.model('Contact', contactSchema);
 

@@ -114,6 +114,7 @@ All responses follow a standardized envelope:
       { name: 'Notifications', description: 'In-app notification management' },
       { name: 'AI', description: 'AI-powered productivity features' },
       { name: 'Health', description: 'Service health & readiness' },
+      { name: 'Search', description: 'Full-text search, Gmail operators, history & saved searches' },
     ],
   },
   apis: ['./src/modules/**/*.routes.js', './src/modules/**/*.controller.js'],

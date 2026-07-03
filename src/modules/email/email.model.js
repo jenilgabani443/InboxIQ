@@ -111,6 +111,38 @@ emailSchema.index({ threadId: 1, createdAt: 1 });
 emailSchema.index({ scheduledAt: 1 }, { sparse: true });
 emailSchema.index({ snoozeUntil: 1 }, { sparse: true });
 emailSchema.index({ isDeleted: 1, deletedAt: 1 });
+// Phase 4: read/unread + folder filtering without collection scans
+emailSchema.index({ 'from.userId': 1, isRead: 1, folder: 1 });
+// Phase 4: label-based queries
+emailSchema.index({ 'from.userId': 1, labels: 1, createdAt: -1 });
+
+// ── Full-Text Index (Phase 4) ──────────────────────────────────────────────────
+// Enables $text search across all human-readable email content.
+// Weights prioritise subject over body snippets over addresses.
+emailSchema.index(
+  {
+    subject: 'text',
+    bodyText: 'text',
+    snippet: 'text',
+    'from.email': 'text',
+    'to.email': 'text',
+    'cc.email': 'text',
+    'bcc.email': 'text',
+  },
+  {
+    name: 'email_fulltext',
+    weights: {
+      subject: 10,
+      bodyText: 5,
+      snippet: 4,
+      'from.email': 3,
+      'to.email': 2,
+      'cc.email': 1,
+      'bcc.email': 1,
+    },
+    default_language: 'english',
+  },
+);
 
 // ── Pre-save: Auto-generate snippet ───────────────────────────────────────────
 emailSchema.pre('save', function (next) {

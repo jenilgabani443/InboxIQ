@@ -26,9 +26,11 @@ const createRateLimiter = ({
     max,
     standardHeaders: true,   // Return rate limit info in RateLimit-* headers
     legacyHeaders: false,     // Disable X-RateLimit-* headers
-    store: new RedisStore({
-      sendCommand: (...args) => getRedisClient().call(...args),
-      prefix: 'rl:',
+    ...(process.env.NODE_ENV !== 'test' && {
+      store: new RedisStore({
+        sendCommand: (...args) => getRedisClient().call(...args),
+        prefix: 'rl:',
+      }),
     }),
     handler: (_req, _res, next) => {
       next(ApiError.tooManyRequests(message));

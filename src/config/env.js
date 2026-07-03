@@ -33,7 +33,7 @@ const envSchema = z.object({
   CLOUDINARY_API_SECRET: z.string(),
 
   // Security
-  BCRYPT_ROUNDS: z.coerce.number().int().min(10).max(15).default(12),
+  BCRYPT_ROUNDS: z.coerce.number().int().min(4).max(15).default(12), // min(4) allows fast hashing in tests
   RATE_LIMIT_WINDOW_MS: z.coerce.number().default(900000),
   RATE_LIMIT_MAX: z.coerce.number().default(100),
   CORS_ORIGINS: z.string().default('http://localhost:3000'),

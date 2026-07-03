@@ -9,6 +9,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 
 const authenticate = require('../../shared/middlewares/authenticate');
+const validate = require('../../shared/middlewares/validate');
 const asyncHandler = require('../../shared/utils/asyncHandler');
 const ApiResponse = require('../../shared/utils/apiResponse');
 const ApiError = require('../../shared/utils/apiError');
@@ -19,6 +20,9 @@ const EVENTS = require('../../shared/constants/events');
 const Email = require('./email.model');
 const Thread = require('../thread/thread.model');
 const { EMAIL_STATUS, EMAIL_FOLDER } = require('../../shared/constants/emailStatus');
+const { searchEmailsSchema } = require('./email.validator');
+const emailService = require('./email.service');
+const searchService = require('../search/search.service');
 
 // All email routes require authentication
 router.use(authenticate);
@@ -205,8 +209,24 @@ router.post(
  *   get:
  *     tags:
  *       - Emails
- *     summary: Search emails
- *     description: Search emails by text, sender, recipient, label, date range or attachment.
+ *     summary: Full-text email search with Gmail-style operators
+ *     description: |
+ *       Search emails using free-text or Gmail-style operators. Operators can be
+ *       combined in a single `q` string, e.g. `from:john@example.com subject:meeting has:attachment`.
+ *
+ *       **Supported operators in `q`:**
+ *       - `from:email` — filter by sender
+ *       - `to:email` — filter by recipient
+ *       - `cc:email` — filter by CC
+ *       - `bcc:email` — filter by BCC
+ *       - `subject:text` — filter by subject
+ *       - `label:name` — filter by label
+ *       - `has:attachment` — only emails with attachments
+ *       - `is:read` / `is:unread` — read status
+ *       - `before:YYYY-MM-DD` — emails before date
+ *       - `after:YYYY-MM-DD` — emails after date
+ *       - `in:inbox|sent|drafts|trash|spam|archive` — folder filter
+ *
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -214,22 +234,40 @@ router.post(
  *         name: q
  *         schema:
  *           type: string
- *         description: Search text in subject, snippet or body
- *         example: Hello
+ *         description: Free-text or Gmail-style operator query
+ *         example: "from:john@example.com subject:meeting has:attachment"
  *
  *       - in: query
  *         name: from
  *         schema:
  *           type: string
- *         description: Sender email address
+ *         description: Sender email address (overrides `from:` operator)
  *         example: john@example.com
  *
  *       - in: query
  *         name: to
  *         schema:
  *           type: string
- *         description: Recipient email address
+ *         description: Recipient email address (overrides `to:` operator)
  *         example: jenil@example.com
+ *
+ *       - in: query
+ *         name: cc
+ *         schema:
+ *           type: string
+ *         description: CC email address
+ *
+ *       - in: query
+ *         name: bcc
+ *         schema:
+ *           type: string
+ *         description: BCC email address
+ *
+ *       - in: query
+ *         name: subject
+ *         schema:
+ *           type: string
+ *         description: Subject text filter
  *
  *       - in: query
  *         name: label
@@ -238,24 +276,58 @@ router.post(
  *         description: Label ID
  *
  *       - in: query
- *         name: before
+ *         name: attachmentName
  *         schema:
  *           type: string
- *           format: date-time
- *         description: Return emails before this date
+ *         description: Attachment filename substring filter
+ *         example: invoice
  *
  *       - in: query
- *         name: after
+ *         name: folder
  *         schema:
  *           type: string
- *           format: date-time
- *         description: Return emails after this date
+ *           enum: [inbox, sent, drafts, trash, spam, archive]
+ *         description: Folder filter
  *
  *       - in: query
  *         name: hasAttachment
  *         schema:
  *           type: boolean
- *         description: Filter emails with attachments
+ *         description: Filter emails that have at least one attachment
+ *
+ *       - in: query
+ *         name: isRead
+ *         schema:
+ *           type: boolean
+ *         description: Filter by read status
+ *
+ *       - in: query
+ *         name: before
+ *         schema:
+ *           type: string
+ *           example: "2024-12-31"
+ *         description: Return emails created before this date (YYYY-MM-DD)
+ *
+ *       - in: query
+ *         name: after
+ *         schema:
+ *           type: string
+ *           example: "2024-01-01"
+ *         description: Return emails created after this date (YYYY-MM-DD)
+ *
+ *       - in: query
+ *         name: sortBy
+ *         schema:
+ *           type: string
+ *           enum: [createdAt, sentAt, subject, priorityScore]
+ *           default: createdAt
+ *
+ *       - in: query
+ *         name: sortOrder
+ *         schema:
+ *           type: string
+ *           enum: [asc, desc]
+ *           default: desc
  *
  *       - in: query
  *         name: page
@@ -268,6 +340,7 @@ router.post(
  *         schema:
  *           type: integer
  *           default: 20
+ *           maximum: 100
  *
  *     responses:
  *       200:
@@ -276,44 +349,79 @@ router.post(
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ApiResponse'
+ *             example:
+ *               success: true
+ *               message: Search results
+ *               data:
+ *                 - _id: "64a62f5cb25241213cf796b9"
+ *                   subject: "Team meeting tomorrow"
+ *                   snippet: "Hi team, let's meet at 10am..."
+ *                   from:
+ *                     email: "john@example.com"
+ *                     name: "John Doe"
+ *                   sentAt: "2024-06-01T10:00:00.000Z"
+ *               meta:
+ *                 page: 1
+ *                 limit: 20
+ *                 total: 1
+ *                 totalPages: 1
+ *                 hasNextPage: false
+ *                 hasPrevPage: false
+ *               errors: null
+ *               timestamp: "2024-06-01T10:00:00.000Z"
  *
  *       400:
- *         description: Invalid search parameters
+ *         description: Bad request — no search filter provided
  *
  *       401:
  *         description: Unauthorized
+ *
+ *       422:
+ *         description: Validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ApiResponse'
+ *             example:
+ *               success: false
+ *               message: Validation failed
+ *               errors:
+ *                 - field: before
+ *                   message: Must be a valid date in YYYY-MM-DD format
+ *                   code: custom
  *
  *       500:
  *         description: Internal server error
  */
 router.get(
   '/search',
+  validate(searchEmailsSchema),
   asyncHandler(async (req, res) => {
-    const { q, from: fromEmail, to: toEmail, label, before, after, hasAttachment, page = 1, limit = 20 } = req.query;
+    const { page, limit, sortBy, sortOrder, ...filters } = req.query;
 
-    if (!q && !fromEmail && !toEmail && !label) {
-      throw ApiError.badRequest('At least one search parameter is required');
+    const { results, meta } = await emailService.searchEmails(
+      req.user.id,
+      filters,
+      { page, limit, sortBy, sortOrder },
+    );
+
+    // Record the query in search history (best-effort — errors are non-fatal)
+    // Use q if provided, otherwise build a compact label from explicit filters.
+    const historyQuery = filters.q || [
+      filters.from && `from:${filters.from}`,
+      filters.to && `to:${filters.to}`,
+      filters.subject && `subject:${filters.subject}`,
+      filters.folder && `in:${filters.folder}`,
+      filters.isRead === true && 'is:read',
+      filters.isRead === false && 'is:unread',
+      filters.hasAttachment === true && 'has:attachment',
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    if (historyQuery) {
+      searchService.addToHistory(req.user.id, historyQuery).catch(() => {});
     }
-
-    const query = { 'from.userId': req.user.id };
-
-    if (q) {
-      query.$or = [
-        { subject: { $regex: q, $options: 'i' } },
-        { snippet: { $regex: q, $options: 'i' } },
-        { bodyText: { $regex: q, $options: 'i' } },
-      ];
-    }
-    if (fromEmail) query['from.email'] = { $regex: fromEmail, $options: 'i' };
-    if (toEmail) query['to.email'] = { $regex: toEmail, $options: 'i' };
-    if (label) query.labels = label;
-    if (hasAttachment === 'true') query.attachments = { $not: { $size: 0 } };
-    if (before) query.createdAt = { ...query.createdAt, $lte: new Date(before) };
-    if (after) query.createdAt = { ...query.createdAt, $gte: new Date(after) };
-
-    const total = await Email.countDocuments(query);
-    const { skip, limit: lim, meta } = paginate({ page, limit, total });
-    const results = await Email.find(query).sort({ createdAt: -1 }).skip(skip).limit(lim).select('-bodyHtml').lean();
 
     return ApiResponse.ok(res, 'Search results', results, meta);
   }),

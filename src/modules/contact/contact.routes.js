@@ -4,11 +4,18 @@ const express = require('express');
 const router = express.Router();
 
 const authenticate = require('../../shared/middlewares/authenticate');
+const validate = require('../../shared/middlewares/validate');
 const asyncHandler = require('../../shared/utils/asyncHandler');
 const ApiResponse = require('../../shared/utils/apiResponse');
 const ApiError = require('../../shared/utils/apiError');
 
 const Contact = require('./contact.model');
+const {
+  autocompleteSchema,
+  createContactSchema,
+  updateContactSchema,
+  deleteContactSchema,
+} = require('./contact.validator');
 
 router.use(authenticate);
 
@@ -46,7 +53,14 @@ router.get(
  *     tags:
  *       - Contacts
  *     summary: Contact autocomplete
- *     description: Search contacts by name or email.
+ *     description: |
+ *       Search contacts by name or email prefix.
+ *       Results are ranked in three tiers:
+ *       1. **Most contacted** — highest `emailCount` first
+ *       2. **Most recent** — highest `lastContactedAt` second
+ *       3. **Alphabetical** — `name` ascending as final tiebreaker
+ *
+ *       Maximum 10 results are returned.
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -55,47 +69,71 @@ router.get(
  *         required: true
  *         schema:
  *           type: string
+ *           minLength: 1
+ *           maxLength: 100
+ *         description: Search prefix matched against both name and email (case-insensitive)
  *         example: jen
  *     responses:
  *       200:
- *         description: Matching contacts.
+ *         description: Matching contacts returned
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ApiResponse'
+ *             example:
+ *               success: true
+ *               message: Autocomplete results
+ *               data:
+ *                 - name: Jenil Gabani
+ *                   email: jenil@example.com
+ *                   avatarUrl: "https://res.cloudinary.com/demo/image/upload/sample.jpg"
+ *                 - name: Jenny Smith
+ *                   email: jenny@example.com
+ *                   avatarUrl: null
+ *               meta: null
+ *               errors: null
+ *               timestamp: "2024-06-01T10:00:00.000Z"
+ *       401:
+ *         description: Unauthorized
+ *       422:
+ *         description: Validation error — q is required and must be 1-100 characters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ApiResponse'
+ *             example:
+ *               success: false
+ *               message: Validation failed
+ *               errors:
+ *                 - field: q
+ *                   message: Search query must be at least 1 character
+ *                   code: too_small
+ *       500:
+ *         description: Internal server error
  */
 router.get(
   '/autocomplete',
+  validate(autocompleteSchema),
   asyncHandler(async (req, res) => {
     const { q } = req.query;
-
-    if (!q || q.length < 1) {
-      return ApiResponse.ok(res, 'Results', []);
-    }
 
     const contacts = await Contact.find({
       userId: req.user.id,
       $or: [
-        {
-          email: {
-            $regex: q,
-            $options: 'i',
-          },
-        },
-        {
-          name: {
-            $regex: q,
-            $options: 'i',
-          },
-        },
+        { email: { $regex: q, $options: 'i' } },
+        { name: { $regex: q, $options: 'i' } },
       ],
     })
-      .sort({ emailCount: -1 })
+      // Three-tier ranking:
+      // 1. Most contacted (emailCount DESC)
+      // 2. Most recent    (lastContactedAt DESC)
+      // 3. Alphabetical   (name ASC)
+      .sort({ emailCount: -1, lastContactedAt: -1, name: 1 })
       .limit(10)
-      .select('email name avatarUrl')
+      .select('email name avatarUrl -_id')
       .lean();
 
-    return ApiResponse.ok(
-      res,
-      'Autocomplete results',
-      contacts,
-    );
+    return ApiResponse.ok(res, 'Autocomplete results', contacts);
   }),
 );
 /**
@@ -129,9 +167,12 @@ router.get(
  *     responses:
  *       201:
  *         description: Contact saved successfully.
+ *       422:
+ *         description: Validation error.
  */
 router.post(
   '/',
+  validate(createContactSchema),
   asyncHandler(async (req, res) => {
     const { email, name, avatarUrl } = req.body;
 
@@ -190,9 +231,14 @@ router.post(
  *     responses:
  *       200:
  *         description: Contact updated successfully.
+ *       404:
+ *         description: Contact not found.
+ *       422:
+ *         description: Validation error.
  */
 router.patch(
   '/:id',
+  validate(updateContactSchema),
   asyncHandler(async (req, res) => {
     const contact = await Contact.findOneAndUpdate(
       {
@@ -231,9 +277,12 @@ router.patch(
  *     responses:
  *       200:
  *         description: Contact deleted successfully.
+ *       404:
+ *         description: Contact not found.
  */
 router.delete(
   '/:id',
+  validate(deleteContactSchema),
   asyncHandler(async (req, res) => {
     await Contact.findOneAndDelete({
       _id: req.params.id,
