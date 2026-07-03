@@ -2,6 +2,8 @@
 
 const request = require('supertest');
 const createApp = require('../../app');
+const { AuditLog } = require('../audit/audit.model');
+const { SecurityAlert } = require('../security/security.model');
 
 let app;
 
@@ -71,12 +73,22 @@ describe('Auth API — Integration Tests', () => {
       refreshToken = res.body.data.refreshToken;
     });
 
-    it('should reject invalid password', async () => {
+    it('should reject invalid password and create LOGIN_FAILED audit and alert', async () => {
       const res = await request(app).post('/api/v1/auth/login').send({
         email: testUser.email,
         password: 'WrongPassword!1',
       });
       expect(res.status).toBe(401);
+
+      // Check Audit Log
+      const audit = await AuditLog.findOne({ action: 'LOGIN_FAILED' }).sort({ createdAt: -1 }).lean();
+      expect(audit).not.toBeNull();
+      // user.email could be mapped to userId via db query but we'll assume it exists if it's the latest
+
+      // Check Security Alert
+      const alert = await SecurityAlert.findOne({ type: 'LOGIN_FAILED' }).sort({ createdAt: -1 }).lean();
+      expect(alert).not.toBeNull();
+      expect(alert.userId.toString()).toBe(audit.userId.toString());
     });
 
     it('should reject non-existent email', async () => {
@@ -131,7 +143,8 @@ describe('Auth API — Integration Tests', () => {
     it('should return 200 ok', async () => {
       const res = await request(app).get('/api/v1/health');
       expect(res.status).toBe(200);
-      expect(res.body.status).toBe('ok');
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.status).toBe('UP');
     });
   });
 });

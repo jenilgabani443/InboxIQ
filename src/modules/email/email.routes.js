@@ -26,6 +26,7 @@ const { searchEmailsSchema, bulkOperationsSchema } = require('./email.validator'
 const emailService = require('./email.service');
 const searchService = require('../search/search.service');
 const { emailQueue, snoozeQueue, filterQueue } = require('../../config/queue');
+const auditService = require('../audit/audit.service');
 
 // All email routes require authentication
 router.use(authenticate);
@@ -62,6 +63,12 @@ router.use(authenticate);
  *         schema:
  *           type: integer
  *           default: 20
+ *       - in: query
+ *         name: shared
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: If true, returns emails belonging to the user's team
  *     responses:
  *       200:
  *         description: Emails retrieved successfully
@@ -71,9 +78,23 @@ router.use(authenticate);
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const { folder = 'inbox', page = 1, limit = 20, label } = req.query;
+    const { folder = 'inbox', page = 1, limit = 20, label, shared } = req.query;
 
-    const query = { 'from.userId': req.user.id };
+    const query = {};
+
+    if (shared === 'true') {
+      const user = await User.findById(req.user.id).select('teamId');
+      console.log('Authenticated user ID:', req.user.id);
+
+      console.log('User from DB:', user);
+      if (!user || !user.teamId) {
+        throw ApiError.badRequest('User does not belong to a team');
+      }
+      query.teamId = user.teamId;
+    } else {
+      query['from.userId'] = req.user.id;
+    }
+
     if (label) {
       query.labels = label;
     } else {
@@ -161,6 +182,10 @@ router.post(
 
     const user = { userId: req.user.id, email: req.user.email, name: req.user.displayName || '' };
 
+    // Read preferences and teamId from sender
+    const sender = await User.findById(req.user.id).select('preferences teamId').lean();
+    const teamId = sender?.teamId || null;
+
     // Find or create thread
     let thread = await Thread.findOne({
       participants: req.user.id,
@@ -172,11 +197,10 @@ router.post(
         subject,
         participants: [req.user.id],
         messageCount: 0,
+        teamId,
       });
     }
 
-    // Read undo-send window from user preferences (default: 10s if not set)
-    const sender = await User.findById(req.user.id).select('preferences').lean();
     const undoSeconds = sender?.preferences?.undoSendSeconds ?? 10;
     const undoExpiry = status === EMAIL_STATUS.SENT ? new Date(Date.now() + undoSeconds * 1000) : null;
 
@@ -211,6 +235,7 @@ router.post(
       scheduledAt: scheduledAt ? new Date(scheduledAt) : null,
       sentAt: status === EMAIL_STATUS.SENT ? new Date() : null,
       undoExpiry,
+      teamId,
     });
 
     // Update thread
@@ -266,6 +291,17 @@ router.post(
         removeOnFail: 50,
       }
     );
+
+    if (status === EMAIL_STATUS.SENT) {
+      auditService.logAudit({
+        userId: req.user.id,
+        action: 'EMAIL_SENT',
+        resourceType: 'Email',
+        resourceId: email._id.toString(),
+        ip: req.ip,
+        userAgent: req.headers['user-agent']
+      });
+    }
 
     return ApiResponse.created(res, 'Email created', email);
   }),
@@ -625,7 +661,7 @@ router.get(
       .join(' ');
 
     if (historyQuery) {
-      searchService.addToHistory(req.user.id, historyQuery).catch(() => {});
+      searchService.addToHistory(req.user.id, historyQuery).catch(() => { });
     }
 
     return ApiResponse.ok(res, 'Search results', results, meta);
@@ -754,6 +790,16 @@ router.patch(
     });
 
     await email.save();
+
+    auditService.logAudit({
+      userId: req.user.id,
+      action: 'EMAIL_UPDATED',
+      resourceType: 'Email',
+      resourceId: email._id.toString(),
+      ip: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
     return ApiResponse.ok(res, 'Draft updated', email);
   }),
 );
@@ -824,6 +870,21 @@ router.delete(
     }
 
     await email.save();
+
+    // Update thread
+    await Thread.findByIdAndUpdate(email.threadId, {
+      $inc: { messageCount: -1 },
+    });
+
+    auditService.logAudit({
+      userId: req.user.id,
+      action: 'EMAIL_DELETED',
+      resourceType: 'Email',
+      resourceId: req.params.id,
+      ip: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
     return ApiResponse.ok(res, email.isDeleted ? 'Email permanently deleted' : 'Email moved to trash');
   }),
 );
@@ -969,6 +1030,16 @@ router.patch(
       { new: true },
     );
     if (!email) throw ApiError.notFound('Email not found');
+
+    auditService.logAudit({
+      userId: req.user.id,
+      action: 'EMAIL_ARCHIVED',
+      resourceType: 'Email',
+      resourceId: email._id.toString(),
+      ip: req.ip,
+      userAgent: req.headers['user-agent']
+    });
+
     return ApiResponse.ok(res, 'Email archived');
   }),
 );
@@ -1055,6 +1126,15 @@ router.patch(
         removeOnFail: 20,
       },
     );
+
+    auditService.logAudit({
+      userId: req.user.id,
+      action: 'EMAIL_SNOOZED',
+      resourceType: 'Email',
+      resourceId: email._id.toString(),
+      ip: req.ip,
+      userAgent: req.headers['user-agent']
+    });
 
     return ApiResponse.ok(res, 'Email snoozed', { snoozeUntil: email.snoozeUntil });
   }),

@@ -42,6 +42,7 @@ const threadSchema = new mongoose.Schema(
       default: THREAD_STATUS.OPEN,
       index: true,
     },
+    teamId: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', index: true },
     assignedTo: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',

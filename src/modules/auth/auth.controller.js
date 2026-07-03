@@ -3,6 +3,7 @@
 const authService = require('./auth.service');
 const ApiResponse = require('../../shared/utils/apiResponse');
 const asyncHandler = require('../../shared/utils/asyncHandler');
+const auditService = require('../audit/audit.service');
 
 /**
  * Auth Controller
@@ -79,14 +80,43 @@ const register = asyncHandler(async (req, res) => {
  */
 const login = asyncHandler(async (req, res) => {
   const { email, password, totpCode } = req.body;
-  const result = await authService.login({
-    email,
-    password,
-    totpCode,
-    userAgent: req.headers['user-agent'],
-    ip: req.ip,
-  });
-  return ApiResponse.ok(res, 'Login successful', result);
+  try {
+    const result = await authService.login({
+      email,
+      password,
+      totpCode,
+      userAgent: req.headers['user-agent'],
+      ip: req.ip,
+    });
+    
+    // Fire and forget audit log
+    await auditService.logAudit({
+      userId: result.user.id,
+      action: 'LOGIN_SUCCESS',
+      ip: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return ApiResponse.ok(res, 'Login successful', result);
+  } catch (error) {
+    // Attempt to log LOGIN_FAILED if the user exists
+    try {
+      const User = require('../user/user.model');
+      const user = await User.findOne({ email: email.toLowerCase() }).lean();
+      if (user) {
+        await auditService.logAudit({
+          userId: user._id,
+          action: 'LOGIN_FAILED',
+          ip: req.ip,
+          userAgent: req.headers['user-agent'],
+          metadata: { reason: error.message }
+        });
+      }
+    } catch (e) {
+      // Ignore lookup errors during audit logging
+    }
+    throw error;
+  }
 });
 
 /**
@@ -118,12 +148,21 @@ const logout = asyncHandler(async (req, res) => {
   const authHeader = req.headers.authorization;
   const accessToken = authHeader?.split(' ')[1];
   const { refreshToken } = req.body;
+  const userId = req.user.id;
 
   await authService.logout({
     accessToken,
     refreshToken,
-    userId: req.user.id,
+    userId,
   });
+  
+  await auditService.logAudit({
+    userId,
+    action: 'LOGOUT',
+    ip: req.ip,
+    userAgent: req.headers['user-agent']
+  });
+
   return ApiResponse.ok(res, 'Logged out successfully');
 });
 
@@ -150,7 +189,15 @@ const forgotPassword = asyncHandler(async (req, res) => {
  *     security: []
  */
 const resetPassword = asyncHandler(async (req, res) => {
-  await authService.resetPassword(req.body);
+  const result = await authService.resetPassword(req.body);
+  
+  await auditService.logAudit({
+    userId: result.userId,
+    action: 'PASSWORD_CHANGED',
+    ip: req.ip,
+    userAgent: req.headers['user-agent']
+  });
+
   return ApiResponse.ok(res, 'Password reset successful. Please login with your new password.');
 });
 
@@ -175,6 +222,14 @@ const enableMfa = asyncHandler(async (req, res) => {
  */
 const verifyMfa = asyncHandler(async (req, res) => {
   await authService.verifyAndActivateMfa({ userId: req.user.id, totpCode: req.body.totpCode });
+  
+  await auditService.logAudit({
+    userId: req.user.id,
+    action: 'MFA_ENABLED',
+    ip: req.ip,
+    userAgent: req.headers['user-agent']
+  });
+
   return ApiResponse.ok(res, 'MFA enabled successfully');
 });
 
@@ -187,6 +242,14 @@ const verifyMfa = asyncHandler(async (req, res) => {
  */
 const disableMfa = asyncHandler(async (req, res) => {
   await authService.disableMfa(req.user.id);
+  
+  await auditService.logAudit({
+    userId: req.user.id,
+    action: 'MFA_DISABLED',
+    ip: req.ip,
+    userAgent: req.headers['user-agent']
+  });
+
   return ApiResponse.ok(res, 'MFA disabled successfully');
 });
 

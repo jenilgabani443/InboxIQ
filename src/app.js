@@ -29,6 +29,9 @@ const notificationRoutes = require('./modules/notification/notification.routes')
 const aiRoutes = require('./modules/ai/ai.routes');
 const healthRoutes = require('./modules/health/health.routes');
 const searchRoutes = require('./modules/search/search.routes');
+const auditRoutes = require('./modules/audit/audit.routes');
+const securityRoutes = require('./modules/security/security.routes');
+const exportRoutes = require('./modules/export/export.routes');
 
 /**
  * Express Application Factory.
@@ -119,6 +122,9 @@ const createApp = () => {
   apiRouter.use('/ai', aiRoutes);
   apiRouter.use('/health', healthRoutes);
   apiRouter.use('/search', searchRoutes);
+  apiRouter.use('/audit', auditRoutes);
+  apiRouter.use('/security', securityRoutes);
+  apiRouter.use('/export', exportRoutes);
   app.use(`/api/${env.API_VERSION}`, apiRouter);
 
   // ── 404 Handler ───────────────────────────────────────────────────────────

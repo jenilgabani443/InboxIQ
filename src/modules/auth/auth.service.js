@@ -258,6 +258,8 @@ class AuthService {
     await user.save();
 
     logger.info('Password reset successful:', { userId: user._id });
+
+    return { userId: user._id };
   }
 
   /**

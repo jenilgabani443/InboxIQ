@@ -24,7 +24,7 @@ const createRateLimiter = ({
   if (process.env.NODE_ENV === 'test') {
     return (_req, _res, next) => next();
   }
-  
+
   return rateLimit({
     windowMs,
     max,
@@ -44,9 +44,9 @@ const createRateLimiter = ({
 const globalLimiter = createRateLimiter();
 
 const authLimiter = createRateLimiter({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10,
-  message: 'Too many authentication attempts. Please try again in 15 minutes.',
+  windowMs: Number(process.env.AUTH_RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000,
+  max: Number(process.env.AUTH_RATE_LIMIT_MAX) || 10,
+  message: 'Too many authentication attempts. Please try again later.',
 });
 
 const uploadLimiter = createRateLimiter({

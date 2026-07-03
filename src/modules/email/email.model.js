@@ -97,6 +97,9 @@ const emailSchema = new mongoose.Schema(
     // Soft delete
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date, default: null },
+
+
+    teamId: { type: mongoose.Schema.Types.ObjectId, ref: 'Team', index: true },
   },
   {
     timestamps: true,

@@ -9,7 +9,13 @@ const ApiResponse = require('../../shared/utils/apiResponse');
 const ApiError = require('../../shared/utils/apiError');
 
 const Thread = require('./thread.model');
-const { THREAD_STATUS } = require('../../shared/constants/emailStatus');
+const User = require('../user/user.model');
+const Notification = require('../notification/notification.model');
+const { THREAD_STATUS, NOTIFICATION_TYPE } = require('../../shared/constants/emailStatus');
+const validate = require('../../shared/middlewares/validate');
+const { updateThreadStatusSchema, assignThreadSchema, addNoteSchema } = require('./thread.validator');
+const { emitToUser } = require('../../config/socket');
+const EVENTS = require('../../shared/constants/events');
 
 router.use(authenticate);
 
@@ -21,6 +27,13 @@ router.use(authenticate);
  *     description: Returns all threads that belong to the authenticated user.
  *     tags:
  *       - Threads
+ *     parameters:
+ *       - in: query
+ *         name: shared
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *         description: If true, returns threads belonging to the user's team
  *     security:
  *       - BearerAuth: []
  *     responses:
@@ -30,9 +43,20 @@ router.use(authenticate);
 router.get(
   '/',
   asyncHandler(async (req, res) => {
-    const threads = await Thread.find({
-      participants: req.user.id,
-    })
+    const { shared } = req.query;
+    const query = {};
+
+    if (shared === 'true') {
+      const user = await User.findById(req.user.id).select('teamId');
+      if (!user || !user.teamId) {
+        throw ApiError.badRequest('User does not belong to a team');
+      }
+      query.teamId = user.teamId;
+    } else {
+      query.participants = req.user.id;
+    }
+
+    const threads = await Thread.find(query)
       .sort({ lastEmailAt: -1 })
       .populate('emailIds', 'snippet from sentAt isRead')
       .lean();
@@ -122,18 +146,36 @@ router.get(
  */
 router.patch(
   '/:id/status',
+  validate(updateThreadStatusSchema),
   asyncHandler(async (req, res) => {
     const { status } = req.body;
 
-    if (!Object.values(THREAD_STATUS).includes(status)) {
-      throw ApiError.badRequest('Invalid status');
+    const thread = await Thread.findById(req.params.id);
+
+    if (!thread) {
+      throw ApiError.notFound('Thread not found');
     }
 
-    const thread = await Thread.findByIdAndUpdate(
-      req.params.id,
-      { status },
-      { new: true },
-    );
+    // Authorization: only participants can update status for now
+    const isParticipant = thread.participants.some(p => p.toString() === req.user.id);
+    if (!isParticipant) {
+      throw ApiError.forbidden('You are not authorized to modify this thread');
+    }
+
+    thread.status = status;
+    await thread.save();
+
+    // Emit real-time event to all participants
+    thread.participants.forEach(participantId => {
+      try {
+        emitToUser(participantId.toString(), EVENTS.THREAD_STATUS_CHANGED, {
+          threadId: thread._id,
+          status,
+        });
+      } catch (err) {
+        // Ignore socket errors
+      }
+    });
 
     return ApiResponse.ok(res, 'Thread status updated', thread);
   }),
@@ -173,14 +215,61 @@ router.patch(
  */
 router.patch(
   '/:id/assign',
+  validate(assignThreadSchema),
   asyncHandler(async (req, res) => {
     const { assignedTo } = req.body;
 
-    const thread = await Thread.findByIdAndUpdate(
-      req.params.id,
-      { assignedTo },
-      { new: true },
-    );
+    const thread = await Thread.findById(req.params.id);
+    if (!thread) {
+      throw ApiError.notFound('Thread not found');
+    }
+
+    // Authorization: only participants can assign thread for now
+    const isParticipant = thread.participants.some(p => p.toString() === req.user.id);
+    if (!isParticipant) {
+      throw ApiError.forbidden('You are not authorized to modify this thread');
+    }
+
+    let assignee = null;
+    if (assignedTo) {
+      assignee = await User.findById(assignedTo);
+      if (!assignee) {
+        throw ApiError.notFound('Assigned user not found');
+      }
+    }
+
+    const previousAssignedTo = thread.assignedTo?.toString();
+    thread.assignedTo = assignedTo || null;
+    await thread.save();
+
+    // If newly assigned to a different user, create a notification
+    if (assignedTo && assignedTo !== previousAssignedTo) {
+      const notification = await Notification.create({
+        userId: assignedTo,
+        type: NOTIFICATION_TYPE.ASSIGNMENT,
+        referenceId: thread._id,
+        referenceModel: 'Thread',
+        message: `You have been assigned to thread: ${thread.subject}`,
+      });
+
+      try {
+        emitToUser(assignedTo, EVENTS.NOTIFICATION, notification);
+      } catch (err) {
+        // Ignore socket errors
+      }
+    }
+
+    // Emit real-time event to all participants
+    thread.participants.forEach(participantId => {
+      try {
+        emitToUser(participantId.toString(), EVENTS.THREAD_ASSIGNED, {
+          threadId: thread._id,
+          assignedTo: thread.assignedTo,
+        });
+      } catch (err) {
+        // Ignore socket errors
+      }
+    });
 
     return ApiResponse.ok(res, 'Thread assigned', thread);
   }),
@@ -226,28 +315,75 @@ router.patch(
  */
 router.post(
   '/:id/notes',
+  validate(addNoteSchema),
   asyncHandler(async (req, res) => {
     const { body, mentions } = req.body;
 
-    const thread = await Thread.findByIdAndUpdate(
+    const thread = await Thread.findById(req.params.id);
+    if (!thread) {
+      throw ApiError.notFound('Thread not found');
+    }
+
+    const isParticipant = thread.participants.some(p => p.toString() === req.user.id);
+    if (!isParticipant) {
+      throw ApiError.forbidden('You are not authorized to access this thread');
+    }
+
+    const uniqueMentions = [...new Set(mentions || [])];
+
+    if (uniqueMentions.length > 0) {
+      const usersCount = await User.countDocuments({ _id: { $in: uniqueMentions } });
+      if (usersCount !== uniqueMentions.length) {
+        throw ApiError.badRequest('One or more mentioned users do not exist');
+      }
+    }
+
+    const updatedThread = await Thread.findByIdAndUpdate(
       req.params.id,
       {
         $push: {
           internalNotes: {
             authorId: req.user.id,
             body,
-            mentions: mentions || [],
+            mentions: uniqueMentions,
           },
         },
       },
       { new: true },
     );
 
-    return ApiResponse.created(
-      res,
-      'Note added',
-      thread.internalNotes.at(-1),
-    );
+    const newNote = updatedThread.internalNotes.at(-1);
+
+    // Emit real-time event to all participants
+    updatedThread.participants.forEach(participantId => {
+      try {
+        emitToUser(participantId.toString(), EVENTS.THREAD_NOTE_ADDED, {
+          threadId: updatedThread._id,
+          note: newNote,
+        });
+      } catch (err) {
+        // Ignore socket errors
+      }
+    });
+
+    // Create notifications for mentioned users
+    for (const mentionedId of uniqueMentions) {
+      try {
+        const notification = await Notification.create({
+          userId: mentionedId,
+          type: NOTIFICATION_TYPE.MENTION,
+          referenceId: thread._id,
+          referenceModel: 'Thread',
+          message: `You were mentioned in a note on thread: ${thread.subject}`,
+        });
+
+        emitToUser(mentionedId.toString(), EVENTS.NOTIFICATION, notification);
+      } catch (err) {
+        // Ignore any errors to ensure API request does not fail
+      }
+    }
+
+    return ApiResponse.created(res, 'Note added', newNote);
   }),
 );
 
@@ -280,10 +416,19 @@ router.get(
       .populate('internalNotes.authorId', 'displayName avatarUrl')
       .lean();
 
+    if (!thread) {
+      throw ApiError.notFound('Thread not found');
+    }
+
+    const isParticipant = thread.participants.some(p => p.toString() === req.user.id);
+    if (!isParticipant) {
+      throw ApiError.forbidden('You are not authorized to access this thread');
+    }
+
     return ApiResponse.ok(
       res,
       'Notes retrieved',
-      thread?.internalNotes || [],
+      thread.internalNotes || [],
     );
   }),
 );
@@ -320,6 +465,25 @@ router.get(
 router.delete(
   '/:id/notes/:noteId',
   asyncHandler(async (req, res) => {
+    const thread = await Thread.findById(req.params.id);
+    if (!thread) {
+      throw ApiError.notFound('Thread not found');
+    }
+
+    const isParticipant = thread.participants.some(p => p.toString() === req.user.id);
+    if (!isParticipant) {
+      throw ApiError.forbidden('You are not authorized to access this thread');
+    }
+
+    const note = thread.internalNotes.id(req.params.noteId);
+    if (!note) {
+      throw ApiError.notFound('Note not found');
+    }
+
+    if (note.authorId.toString() !== req.user.id) {
+      throw ApiError.forbidden('You can only delete your own notes');
+    }
+
     await Thread.findByIdAndUpdate(
       req.params.id,
       {

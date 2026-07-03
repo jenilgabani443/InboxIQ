@@ -87,7 +87,8 @@ describe('Queue Infrastructure — Application Health', () => {
     const res = await request(app).get('/api/v1/health');
 
     expect(res.status).toBe(200);
-    expect(res.body.status).toBe('ok');
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.status).toBe('UP');
   });
 
   it('POST /api/v1/auth/register should still work normally', async () => {
