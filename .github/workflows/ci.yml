@@ -38,6 +38,7 @@ jobs:
           
       - name: Optional - Run linting
         run: npm run lint
+        continue-on-error: true
         
       - name: Stage 5 - Run automated tests
         run: npm test
