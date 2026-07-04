@@ -188,3 +188,33 @@ Client ──► Nginx ──► Express API ──► MongoDB Atlas
 ## 📄 License
 
 MIT © InboxIQ Engineering
+
+---
+
+## 🚀 CI/CD Pipeline
+
+The project uses GitHub Actions for Continuous Integration (CI) and automated verification.
+
+### Workflow Purpose
+The workflow ensures code quality and prevents broken builds from reaching main branches. It automatically lints code, runs the test suite, generates test coverage reports, and verifies that the production Docker image successfully builds.
+
+### Trigger Conditions
+The pipeline runs automatically on:
+- `push` events to `main`, `master`, and `develop`
+- `pull_request` events targeting `main`, `master`, and `develop`
+
+### Pipeline Stages
+1. **Checkout**: Checks out the repository using `actions/checkout`.
+2. **Setup Node**: Uses Node.js v20 with npm caching enabled.
+3. **Dependencies**: Installs dependencies immutably using `npm ci`.
+4. **Environment**: Generates a temporary `.env` via `cp .env.example .env` (using placeholders instead of hardcoded secrets).
+5. **Lint & Test**: Runs ESLint and full Jest test suites. Fails the pipeline if any test fails.
+6. **Coverage**: Generates and uploads a code coverage artifact (retained for 14 days).
+7. **Docker Verification**: Builds the production Docker image to ensure the `Dockerfile` configuration is healthy. No deployment is performed.
+
+### How to Monitor Workflow Runs
+After pushing code or opening a Pull Request:
+1. Navigate to your repository on GitHub.
+2. Click the **Actions** tab.
+3. Select the latest **CI/CD Pipeline** run to view real-time logs for each stage.
+4. You can also download the **coverage-report** artifact from the run summary page.

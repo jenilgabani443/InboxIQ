@@ -3,7 +3,7 @@ services:
   api:
     build:
       context: ..
-      dockerfile: docker/Dockerfile.dev
+      dockerfile: docker/Dockerfile
 
     container_name: inboxiq-api
 
@@ -16,7 +16,7 @@ services:
       - "5000:5000"
 
     environment:
-      NODE_ENV: development
+      NODE_ENV: production
       PORT: 5000
       MONGO_URI: mongodb://mongo:27017/inboxiq
       REDIS_URL: redis://redis:6379
@@ -27,10 +27,6 @@ services:
 
       CORS_ORIGINS: "http://localhost:3000,http://localhost:5173,http://localhost:5000"
       CLIENT_URL: http://localhost:3000
-
-    volumes:
-      - ..:/app
-      - /app/node_modules
 
     depends_on:
       mongo:

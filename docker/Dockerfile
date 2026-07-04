@@ -1,29 +1,24 @@
 # ── Base image ────────────────────────────────────────────────────────────────
 FROM node:20-alpine AS base
 WORKDIR /app
+# Install curl for healthcheck
 RUN apk add --no-cache curl
 
 # ── Dependencies ───────────────────────────────────────────────────────────────
 FROM base AS deps
 COPY package*.json ./
-RUN npm ci --only=production && npm cache clean --force
-
-# ── Builder ────────────────────────────────────────────────────────────────────
-FROM base AS builder
-COPY package*.json ./
-RUN npm ci
-COPY . .
+RUN npm ci --omit=dev && npm cache clean --force
 
 # ── Production image ───────────────────────────────────────────────────────────
-FROM node:20-alpine AS production
-WORKDIR /app
+FROM base AS production
 
 # Security: run as non-root user
 RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 inboxiq
 
-# Copy production deps and source
+# Copy production deps
 COPY --from=deps --chown=inboxiq:nodejs /app/node_modules ./node_modules
+# Copy application source code
 COPY --chown=inboxiq:nodejs . .
 
 # Create logs directory with correct ownership
@@ -37,6 +32,6 @@ ENV NODE_ENV=production
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-  CMD curl -f http://localhost:5000/health || exit 1
+  CMD curl -f http://localhost:5000/api/v1/health || exit 1
 
 CMD ["node", "src/server.js"]
