@@ -16,8 +16,7 @@ class ExportService {
     }
 
     const header = columns.join(',');
-    const rows = data.map(item => {
-      return columns.map(col => {
+    const rows = data.map(item => columns.map(col => {
         let val = item[col];
         if (val === null || val === undefined) val = '';
         
@@ -27,8 +26,7 @@ class ExportService {
           val = `"${val}"`;
         }
         return val;
-      }).join(',');
-    });
+      }).join(','));
 
     return [header, ...rows].join('\n');
   }

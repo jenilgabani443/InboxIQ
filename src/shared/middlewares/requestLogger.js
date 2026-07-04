@@ -15,10 +15,10 @@ const stream = {
   write: (message) => logger.http(message.trim()),
 };
 
-const skip = (req) => {
+const skip = (req) => 
   // Skip health endpoints
-  return req.path === '/health' || req.path === '/health/ready';
-};
+   req.path === '/health' || req.path === '/health/ready'
+;
 
 const requestLogger = morgan(
   process.env.NODE_ENV === 'production'

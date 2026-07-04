@@ -11,7 +11,7 @@ class HealthService {
   }
 
   getReadiness() {
-    const readyState = mongoose.connection.readyState;
+    const {readyState} = mongoose.connection;
     const dbStatusMap = {
       0: 'DISCONNECTED',
       1: 'CONNECTED',

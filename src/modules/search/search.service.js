@@ -66,13 +66,11 @@ const addToHistory = async (userId, query) => {
  * @param {string} userId
  * @returns {object[]}
  */
-const getHistory = async (userId) => {
-  return SearchHistory.find({ userId: new mongoose.Types.ObjectId(userId) })
+const getHistory = async (userId) => SearchHistory.find({ userId: new mongoose.Types.ObjectId(userId) })
     .sort({ searchedAt: -1 })
     .limit(HISTORY_LIMIT)
     .select('query searchedAt -_id')
     .lean();
-};
 
 /**
  * Delete all search history entries for a user.
@@ -125,11 +123,9 @@ const createSavedSearch = async (userId, { name, query }) => {
  * @param {string} userId
  * @returns {object[]}
  */
-const getSavedSearches = async (userId) => {
-  return SavedSearch.find({ userId: new mongoose.Types.ObjectId(userId) })
+const getSavedSearches = async (userId) => SavedSearch.find({ userId: new mongoose.Types.ObjectId(userId) })
     .sort({ createdAt: -1 })
     .lean();
-};
 
 /**
  * Update name and/or query of a saved search.

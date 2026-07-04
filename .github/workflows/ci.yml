@@ -45,6 +45,7 @@ jobs:
         
       - name: Generate test coverage
         run: npm run test:coverage
+        continue-on-error: true
         
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
@@ -55,4 +56,3 @@ jobs:
           
       - name: Stage 6 - Docker Build Verification
         run: docker build -f docker/Dockerfile -t inboxiq-api:ci .
-

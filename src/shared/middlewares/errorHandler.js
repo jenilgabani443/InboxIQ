@@ -22,7 +22,7 @@ const env = require('../../config/env');
  * - JsonWebTokenError               → Map to 401
  * - Unknown errors                  → Return generic 500
  */
-// eslint-disable-next-line no-unused-vars
+ 
 const errorHandler = (err, req, res, _next) => {
   let error = err;
 
