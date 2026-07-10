@@ -59,9 +59,24 @@ export function EmailListItem({ email, isSelected, onClick }: EmailListItemProps
         <div className={cn("truncate text-sm", !email.isRead ? "font-bold" : "font-medium")}>
           {email.subject || "(No subject)"}
         </div>
-
-        <div className="truncate text-xs text-muted-foreground">
-          {email.snippet || "..."}
+        
+        <div className="flex items-center gap-2 mt-1 w-full overflow-hidden">
+          {email.labels && email.labels.length > 0 && (
+            <div className="flex flex-wrap gap-1 shrink-0">
+              {email.labels.map(label => (
+                <div 
+                  key={label._id} 
+                  className="px-1.5 py-0.5 text-[10px] rounded border"
+                  style={{ borderColor: label.color, color: label.color }}
+                >
+                  {label.name}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="truncate text-xs text-muted-foreground flex-1">
+            {email.snippet || "..."}
+          </div>
         </div>
       </div>
     </button>

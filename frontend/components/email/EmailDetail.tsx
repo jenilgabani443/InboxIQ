@@ -18,15 +18,22 @@ export function EmailDetail() {
     emailError, 
     fetchEmailById, 
     clearSelectedEmail,
-    markEmailAsRead
+    markEmailAsRead,
+    currentFolder
   } = useEmailStore();
 
   useEffect(() => {
     if (selectedEmailId) {
       fetchEmailById(selectedEmailId);
-      markEmailAsRead(selectedEmailId);
     }
-  }, [selectedEmailId, fetchEmailById, markEmailAsRead]);
+  }, [selectedEmailId, fetchEmailById]);
+
+  useEffect(() => {
+    if (selectedEmail && !selectedEmail.isRead && currentFolder === "inbox") {
+      const id = selectedEmail.id || selectedEmail._id;
+      if (id) markEmailAsRead(id as string);
+    }
+  }, [selectedEmail, markEmailAsRead, currentFolder]);
 
   if (!selectedEmailId) {
     return (

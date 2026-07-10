@@ -2,6 +2,8 @@ import * as React from "react";
 import { Sidebar } from "@/components/global/Sidebar";
 import { Header } from "@/components/global/Header";
 import { MobileNav } from "@/components/global/MobileNav";
+import { ComposeDialog } from "@/components/email/ComposeDialog";
+import { SettingsDialog } from "@/components/global/SettingsDialog";
 
 export default function AppLayout({
   children,
@@ -18,6 +20,8 @@ export default function AppLayout({
           {children}
         </main>
       </div>
+      <ComposeDialog />
+      <SettingsDialog />
     </div>
   );
 }
