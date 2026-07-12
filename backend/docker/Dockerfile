@@ -1,5 +1,5 @@
 # ── Base image ────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS base
+FROM node:22-alpine AS base
 WORKDIR /app
 
 # ── Dependencies ───────────────────────────────────────────────────────────────
@@ -12,7 +12,7 @@ FROM base AS production
 
 # Security: run as non-root user
 RUN addgroup --system --gid 1001 nodejs && \
-    adduser --system --uid 1001 inboxiq
+  adduser --system --uid 1001 inboxiq
 
 # Copy production deps
 COPY --from=deps --chown=inboxiq:nodejs /app/node_modules ./node_modules

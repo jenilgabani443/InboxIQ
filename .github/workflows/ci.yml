@@ -24,26 +24,32 @@ jobs:
       - name: Stage 2 - Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
           
       - name: Stage 3 - Install dependencies
+        working-directory: backend
         run: npm ci
         
       - name: Stage 4 - Environment preparation
+        working-directory: backend
         run: |
           # Use placeholder secrets for CI environment testing.
           # For production deployments, use GitHub Secrets: ${{ secrets.SECRET_NAME }}
           cp .env.example .env
           
       - name: Optional - Run linting
+        working-directory: backend
         run: npm run lint
         continue-on-error: true
         
       - name: Stage 5 - Run automated tests
+        working-directory: backend
         run: npm test
         
       - name: Generate test coverage
+        working-directory: backend
         run: npm run test:coverage
         continue-on-error: true
         
@@ -51,8 +57,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: coverage/
+          path: backend/coverage/
           retention-days: 14
           
       - name: Stage 6 - Docker Build Verification
-        run: docker build -f docker/Dockerfile -t inboxiq-api:ci .
+        run: docker build -f backend/docker/Dockerfile -t inboxiq-api:ci backend
