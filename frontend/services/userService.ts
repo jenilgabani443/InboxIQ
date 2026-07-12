@@ -51,5 +51,10 @@ export const userService = {
   updatePreferences: async (payload: UserPreferences): Promise<{ success: boolean; message: string; data: { preferences: UserPreferences } }> => {
     const response = await api.put("/users/me/preferences", payload);
     return response.data;
+  },
+
+  changePassword: async (payload: { currentPassword: string; newPassword: string }): Promise<{ success: boolean; message: string }> => {
+    const response = await api.put("/users/me/password", payload);
+    return response.data;
   }
 };

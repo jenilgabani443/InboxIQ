@@ -17,6 +17,19 @@ export interface EmailAttachment {
   mimeType: string;
 }
 
+export interface SearchHistoryItem {
+  query: string;
+  searchedAt: string;
+}
+
+export interface SavedSearch {
+  _id: string;
+  name: string;
+  query: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface Email {
   id: string;
   _id?: string;
@@ -50,4 +63,15 @@ export interface PaginatedResponse<T> {
   message: string;
   data: T[];
   meta: PaginationMeta;
+}
+
+export interface AppNotification {
+  _id: string;
+  type: string;
+  referenceId?: string;
+  referenceModel?: string;
+  message: string;
+  isRead: boolean;
+  createdAt: string;
+  updatedAt: string;
 }

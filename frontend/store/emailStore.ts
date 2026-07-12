@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { Email, PaginationMeta, EmailLabel } from "@/types/email";
+import { Email, PaginationMeta, EmailLabel, SearchHistoryItem, SavedSearch, AppNotification } from "@/types/email";
 import { emailService } from "@/services/emailService";
 import { AxiosError } from "axios";
 
@@ -48,6 +48,27 @@ interface EmailState {
   clearSearch: () => void;
   clearSelectedEmail: () => void;
   clearError: () => void;
+
+  searchHistory: SearchHistoryItem[];
+  savedSearches: SavedSearch[];
+  loadingHistory: boolean;
+  loadingSavedSearches: boolean;
+  
+  fetchSearchHistory: () => Promise<void>;
+  clearSearchHistory: () => Promise<void>;
+  fetchSavedSearches: () => Promise<void>;
+  saveSearch: (name: string, query: string) => Promise<boolean>;
+  renameSavedSearch: (id: string, name: string) => Promise<boolean>;
+  deleteSavedSearch: (id: string) => Promise<boolean>;
+
+  notifications: AppNotification[];
+  loadingNotifications: boolean;
+  unreadCount: number;
+  
+  fetchNotifications: () => Promise<void>;
+  markNotificationRead: (id: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
+  deleteNotification: (id: string) => Promise<void>;
 }
 
 export const useEmailStore = create<EmailState>((set, get) => ({
@@ -66,6 +87,15 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   labels: [],
   searchQuery: "",
   isSearching: false,
+  
+  searchHistory: [],
+  savedSearches: [],
+  loadingHistory: false,
+  loadingSavedSearches: false,
+
+  notifications: [],
+  loadingNotifications: false,
+  unreadCount: 0,
 
   fetchInbox: async () => {
     set({ loading: true, error: null });
@@ -264,6 +294,13 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     set({ loadingEmail: true, emailError: null });
     try {
       const response = await emailService.getEmailById(id);
+      
+      // If we optimistically marked it as read in the list, ensure the fetched detail reflects this
+      const emailInList = get().emails.find(e => (e.id || e._id) === id);
+      if (emailInList && emailInList.isRead) {
+        response.data.isRead = true;
+      }
+      
       set({ selectedEmail: response.data, loadingEmail: false });
     } catch (error: unknown) {
       const err = error as AxiosError<{ message: string }>;
@@ -410,7 +447,156 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   setComposeOpen: (isOpen) => set({ isComposeOpen: isOpen }),
   setDraftEmailToEdit: (email) => set({ draftEmailToEdit: email }),
   setSearchQuery: (query) => set({ searchQuery: query }),
-  setSelectedEmail: (id) => set({ selectedEmailId: id }),
+  setSelectedEmail: (id) => {
+    set({ selectedEmailId: id });
+    if (id) {
+      const email = get().emails.find(e => (e.id || e._id) === id);
+      if (email && !email.isRead) {
+        get().markEmailAsRead(id, true);
+      }
+    }
+  },
   clearSelectedEmail: () => set({ selectedEmailId: null, selectedEmail: null, emailError: null }),
   clearError: () => set({ error: null, emailError: null }),
+
+  fetchSearchHistory: async () => {
+    set({ loadingHistory: true });
+    try {
+      const response = await emailService.getSearchHistory();
+      set({ searchHistory: response.data });
+    } catch (error) {
+      console.error("Failed to load search history", error);
+    } finally {
+      set({ loadingHistory: false });
+    }
+  },
+
+  clearSearchHistory: async () => {
+    try {
+      await emailService.clearSearchHistory();
+      set({ searchHistory: [] });
+    } catch (error) {
+      console.error("Failed to clear search history", error);
+      throw error;
+    }
+  },
+
+  fetchSavedSearches: async () => {
+    set({ loadingSavedSearches: true });
+    try {
+      const response = await emailService.getSavedSearches();
+      set({ savedSearches: response.data });
+    } catch (error) {
+      console.error("Failed to load saved searches", error);
+    } finally {
+      set({ loadingSavedSearches: false });
+    }
+  },
+
+  saveSearch: async (name: string, query: string) => {
+    try {
+      await emailService.saveSearch({ name, query });
+      get().fetchSavedSearches();
+      return true;
+    } catch (error) {
+      console.error("Failed to save search", error);
+      throw error;
+    }
+  },
+
+  renameSavedSearch: async (id: string, name: string) => {
+    try {
+      await emailService.renameSavedSearch(id, name);
+      get().fetchSavedSearches();
+      return true;
+    } catch (error) {
+      console.error("Failed to rename saved search", error);
+      throw error;
+    }
+  },
+
+  deleteSavedSearch: async (id: string) => {
+    try {
+      await emailService.deleteSavedSearch(id);
+      get().fetchSavedSearches();
+      return true;
+    } catch (error) {
+      console.error("Failed to delete saved search", error);
+      throw error;
+    }
+  },
+
+  fetchNotifications: async () => {
+    set({ loadingNotifications: true });
+    try {
+      const response = await emailService.getNotifications();
+      const notifications = response.data;
+      const unreadCount = notifications.filter(n => !n.isRead).length;
+      set({ notifications, unreadCount, loadingNotifications: false });
+    } catch (error) {
+      console.error("Failed to fetch notifications", error);
+      set({ loadingNotifications: false });
+    }
+  },
+
+  markNotificationRead: async (id: string) => {
+    const { notifications, unreadCount } = get();
+    const notification = notifications.find(n => n._id === id);
+    
+    if (notification && !notification.isRead) {
+      // Optimistic update
+      const newNotifications = notifications.map(n => 
+        n._id === id ? { ...n, isRead: true } : n
+      );
+      set({ notifications: newNotifications, unreadCount: Math.max(0, unreadCount - 1) });
+      
+      try {
+        await emailService.markNotificationRead(id);
+      } catch (error) {
+        console.error("Failed to mark notification read", error);
+        // Revert on failure
+        set({ notifications, unreadCount });
+      }
+    }
+  },
+
+  markAllNotificationsRead: async () => {
+    const { notifications, unreadCount } = get();
+    
+    if (unreadCount > 0) {
+      // Optimistic update
+      const newNotifications = notifications.map(n => ({ ...n, isRead: true }));
+      set({ notifications: newNotifications, unreadCount: 0 });
+      
+      try {
+        await emailService.markAllNotificationsRead();
+      } catch (error) {
+        console.error("Failed to mark all notifications read", error);
+        // Revert on failure
+        set({ notifications, unreadCount });
+        throw error;
+      }
+    }
+  },
+
+  deleteNotification: async (id: string) => {
+    const { notifications, unreadCount } = get();
+    const notification = notifications.find(n => n._id === id);
+    
+    if (notification) {
+      // Optimistic update
+      const newNotifications = notifications.filter(n => n._id !== id);
+      const newUnreadCount = !notification.isRead ? Math.max(0, unreadCount - 1) : unreadCount;
+      set({ notifications: newNotifications, unreadCount: newUnreadCount });
+      
+      try {
+        await emailService.deleteNotification(id);
+      } catch (error) {
+        console.error("Failed to delete notification", error);
+        // Revert on failure
+        set({ notifications, unreadCount });
+        throw error;
+      }
+    }
+  }
 }));

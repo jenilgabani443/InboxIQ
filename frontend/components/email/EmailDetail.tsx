@@ -18,8 +18,6 @@ export function EmailDetail() {
     emailError, 
     fetchEmailById, 
     clearSelectedEmail,
-    markEmailAsRead,
-    currentFolder
   } = useEmailStore();
 
   useEffect(() => {
@@ -28,12 +26,6 @@ export function EmailDetail() {
     }
   }, [selectedEmailId, fetchEmailById]);
 
-  useEffect(() => {
-    if (selectedEmail && !selectedEmail.isRead && currentFolder === "inbox") {
-      const id = selectedEmail.id || selectedEmail._id;
-      if (id) markEmailAsRead(id as string);
-    }
-  }, [selectedEmail, markEmailAsRead, currentFolder]);
 
   if (!selectedEmailId) {
     return (

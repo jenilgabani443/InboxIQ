@@ -1,5 +1,5 @@
 import { api } from "./api";
-import { Email, PaginatedResponse, EmailLabel } from "@/types/email";
+import { Email, PaginatedResponse, EmailLabel, SearchHistoryItem, SavedSearch, AppNotification } from "@/types/email";
 
 export interface SendEmailPayload {
   to: { email: string; name?: string }[];
@@ -9,6 +9,7 @@ export interface SendEmailPayload {
   bodyText: string;
   bodyHtml?: string;
   status?: "sent" | "draft";
+  attachments?: string[];
 }
 
 export const emailService = {
@@ -110,6 +111,7 @@ export const emailService = {
     subject: string;
     bodyText: string;
     bodyHtml: string;
+    attachments: string[];
   }>): Promise<{ success: boolean; message: string; data: Email }> => {
     const response = await api.patch<{ success: boolean; message: string; data: Email }>(`/emails/${id}`, payload);
     return response.data;
@@ -142,6 +144,63 @@ export const emailService = {
       operation: "removeLabels",
       labels
     });
+    return response.data;
+  },
+
+  uploadAttachment: async (file: File): Promise<{ success: boolean; message: string; data: { _id: string; filename: string; sizeBytes: number } }> => {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await api.post<{ success: boolean; message: string; data: { _id: string; filename: string; sizeBytes: number } }>("/attachments/upload", formData);
+    return response.data;
+  },
+
+  getSearchHistory: async (): Promise<{ success: boolean; message: string; data: SearchHistoryItem[] }> => {
+    const response = await api.get("/search/history");
+    return response.data;
+  },
+
+  clearSearchHistory: async (): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete("/search/history");
+    return response.data;
+  },
+
+  saveSearch: async (payload: { name: string; query: string }): Promise<{ success: boolean; message: string; data: SavedSearch }> => {
+    const response = await api.post("/search/saved", payload);
+    return response.data;
+  },
+
+  getSavedSearches: async (): Promise<{ success: boolean; message: string; data: SavedSearch[] }> => {
+    const response = await api.get("/search/saved");
+    return response.data;
+  },
+
+  renameSavedSearch: async (id: string, name: string): Promise<{ success: boolean; message: string; data: SavedSearch }> => {
+    const response = await api.patch(`/search/saved/${id}`, { name });
+    return response.data;
+  },
+
+  deleteSavedSearch: async (id: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete(`/search/saved/${id}`);
+    return response.data;
+  },
+
+  getNotifications: async (): Promise<PaginatedResponse<AppNotification>> => {
+    const response = await api.get<PaginatedResponse<AppNotification>>("/notifications");
+    return response.data;
+  },
+
+  markNotificationRead: async (id: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.patch<{ success: boolean; message: string }>(`/notifications/${id}/read`);
+    return response.data;
+  },
+
+  markAllNotificationsRead: async (): Promise<{ success: boolean; message: string }> => {
+    const response = await api.patch<{ success: boolean; message: string }>("/notifications/read-all");
+    return response.data;
+  },
+
+  deleteNotification: async (id: string): Promise<{ success: boolean; message: string }> => {
+    const response = await api.delete<{ success: boolean; message: string }>(`/notifications/${id}`);
     return response.data;
   }
 };

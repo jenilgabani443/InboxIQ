@@ -4,8 +4,7 @@ import * as React from "react";
 import { ThemeToggle } from "./ThemeToggle";
 import { SearchBar } from "./SearchBar";
 import { UserMenu } from "./UserMenu";
-import { Bell } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { NotificationDropdown } from "./NotificationDropdown";
 
 export function Header() {
   return (
@@ -14,12 +13,7 @@ export function Header() {
         <SearchBar />
       </div>
       <div className="flex items-center gap-2 md:gap-4">
-        <Button variant="ghost" size="icon" className="text-muted-foreground relative" title="Notifications">
-          <Bell className="h-5 w-5" />
-          {/* Mock notification badge */}
-          <span className="absolute top-2 right-2.5 h-2 w-2 rounded-full bg-primary" />
-          <span className="sr-only">Notifications</span>
-        </Button>
+        <NotificationDropdown />
         <ThemeToggle />
         <UserMenu />
       </div>

@@ -4,7 +4,8 @@ import * as React from "react";
 import { useState } from "react";
 import { useEmailStore } from "@/store/emailStore";
 import { emailService } from "@/services/emailService";
-import { X, Send, Minimize2, Maximize2 } from "lucide-react";
+import { EmailAttachment } from "@/types/email";
+import { X, Send, Minimize2, Maximize2, Paperclip, FileIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,10 @@ export function ComposeDialog() {
   const [body, setBody] = useState("");
   const [showCcBcc, setShowCcBcc] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [attachments, setAttachments] = useState<EmailAttachment[]>([]);
+  const [isUploading, setIsUploading] = useState(false);
+  
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
 
   const resetForm = React.useCallback(() => {
     setTo("");
@@ -33,6 +38,7 @@ export function ComposeDialog() {
     setBody("");
     setShowCcBcc(false);
     setError(null);
+    setAttachments([]);
   }, []);
 
   React.useEffect(() => {
@@ -45,6 +51,7 @@ export function ComposeDialog() {
         setSubject(draftEmailToEdit.subject || "");
         setBody(draftEmailToEdit.bodyText || draftEmailToEdit.bodyHtml || "");
         setShowCcBcc(!!(draftEmailToEdit.cc?.length || draftEmailToEdit.bcc?.length));
+        setAttachments(draftEmailToEdit.attachments || []);
       } else {
         resetForm();
       }
@@ -91,6 +98,7 @@ export function ComposeDialog() {
           subject,
           bodyText: body,
           bodyHtml: body,
+          attachments: attachments.map(a => a._id),
         });
         toast.success("Draft updated successfully!");
         if (currentFolder === "drafts") fetchDrafts();
@@ -102,6 +110,7 @@ export function ComposeDialog() {
           subject,
           bodyText: body,
           status: "sent",
+          attachments: attachments.map(a => a._id),
         });
         toast.success("Email sent successfully!");
       }
@@ -118,6 +127,58 @@ export function ComposeDialog() {
     } finally {
       setIsSending(false);
     }
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.length) return;
+    
+    setIsUploading(true);
+    setError(null);
+    
+    try {
+      const files = Array.from(e.target.files);
+      const newAttachments: EmailAttachment[] = [];
+      
+      for (const file of files) {
+        const res = await emailService.uploadAttachment(file);
+        if (res.success && res.data) {
+          // ensure data fields align with EmailAttachment interface
+          newAttachments.push({
+            _id: res.data._id,
+            filename: res.data.filename,
+            sizeBytes: res.data.sizeBytes,
+            mimeType: file.type || "application/octet-stream"
+          });
+        }
+      }
+      
+      setAttachments(prev => [...prev, ...newAttachments]);
+    } catch (err) {
+      if (err instanceof Error) {
+        const backendMsg = (err as { response?: { data?: { message?: string } } }).response?.data?.message;
+        setError(backendMsg || "Failed to upload attachment: " + err.message);
+      } else {
+        setError("Failed to upload attachment");
+      }
+    } finally {
+      setIsUploading(false);
+      // reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  };
+
+  const removeAttachment = (idToRemove: string) => {
+    setAttachments(prev => prev.filter(a => a._id !== idToRemove));
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
   return (
@@ -215,9 +276,29 @@ export function ComposeDialog() {
               placeholder="Write your message..."
               value={body}
               onChange={(e) => setBody(e.target.value)}
-              disabled={isSending}
+              disabled={isSending || isUploading}
             />
           </div>
+          
+          {attachments.length > 0 && (
+            <div className="flex flex-wrap gap-2 pt-2 border-t">
+              {attachments.map((att) => (
+                <div key={att._id} className="flex items-center gap-2 bg-muted/50 border rounded-md px-3 py-1.5 text-sm">
+                  <FileIcon className="h-4 w-4 text-muted-foreground" />
+                  <span className="max-w-[150px] truncate">{att.filename}</span>
+                  <span className="text-xs text-muted-foreground">({formatFileSize(att.sizeBytes)})</span>
+                  <button 
+                    onClick={() => removeAttachment(att._id)}
+                    className="ml-1 text-muted-foreground hover:text-foreground p-0.5 rounded-full hover:bg-muted"
+                    type="button"
+                    title="Remove attachment"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <DialogFooter className="p-4 sm:p-5 border-t flex flex-row items-center justify-between gap-4 bg-muted/10 shrink-0">
@@ -225,12 +306,28 @@ export function ComposeDialog() {
             {error && <span className="text-sm text-destructive font-medium truncate block">{error}</span>}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Button variant="ghost" onClick={() => handleOpenChange(false)} disabled={isSending}>
+            <input 
+              type="file"
+              multiple
+              className="hidden"
+              ref={fileInputRef}
+              onChange={handleFileSelect}
+            />
+            <Button 
+              variant="ghost" 
+              size="icon" 
+              onClick={() => fileInputRef.current?.click()} 
+              disabled={isSending || isUploading}
+              title="Attach files"
+            >
+              <Paperclip className="h-4 w-4" />
+            </Button>
+            <Button variant="ghost" onClick={() => handleOpenChange(false)} disabled={isSending || isUploading}>
               Discard
             </Button>
-            <Button onClick={handleSend} disabled={isSending} className="min-w-24 gap-2">
-              {isSending ? (draftEmailToEdit ? "Saving..." : "Sending...") : (draftEmailToEdit ? "Save Draft" : "Send")}
-              {!isSending && (draftEmailToEdit ? null : <Send className="h-4 w-4" />)}
+            <Button onClick={handleSend} disabled={isSending || isUploading} className="min-w-24 gap-2">
+              {isSending ? (draftEmailToEdit ? "Saving..." : "Sending...") : isUploading ? "Uploading..." : (draftEmailToEdit ? "Save Draft" : "Send")}
+              {!isSending && !isUploading && (draftEmailToEdit ? null : <Send className="h-4 w-4" />)}
             </Button>
           </div>
         </DialogFooter>

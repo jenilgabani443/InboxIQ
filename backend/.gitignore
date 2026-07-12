@@ -42,3 +42,12 @@ temp/
 # Misc
 *.pid
 *.seed
+
+# npm cache
+.npm/
+
+# ESLint cache
+.eslintcache
+
+# VS Code workspace
+*.code-workspace

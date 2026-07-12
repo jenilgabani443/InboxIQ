@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { Menu, Inbox, Tag } from "lucide-react";
+import { Menu, Inbox, Tag, Bookmark, MoreVertical, Edit2, Trash2 } from "lucide-react";
 import Link from "next/link";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle, SheetDescription } from "@/components/ui/sheet";
@@ -11,11 +11,68 @@ import { useEmailStore } from "@/store/emailStore";
 import { useSettingsStore } from "@/store/settingsStore";
 import { PenSquare } from "lucide-react";
 import { toast } from "sonner";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export function MobileNav() {
   const [open, setOpen] = React.useState(false);
-  const { currentFolder, currentLabelId, setCurrentFolder, setComposeOpen, labels, setCurrentLabel } = useEmailStore();
+  const { 
+    currentFolder, currentLabelId, setCurrentFolder, setComposeOpen, labels, setCurrentLabel,
+    savedSearches, renameSavedSearch, deleteSavedSearch, setSearchQuery, searchEmails 
+  } = useEmailStore();
   const { setSettingsOpen } = useSettingsStore();
+
+  const [renameDialogOpen, setRenameDialogOpen] = React.useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
+  const [selectedSavedSearchId, setSelectedSavedSearchId] = React.useState<string | null>(null);
+  const [renameInput, setRenameInput] = React.useState("");
+  const [isRenaming, setIsRenaming] = React.useState(false);
+  const [isDeleting, setIsDeleting] = React.useState(false);
+
+  const handleSavedSearchClick = (query: string) => {
+    setSearchQuery(query);
+    searchEmails(query);
+    setOpen(false);
+  };
+
+  const handleRenameSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedSavedSearchId || !renameInput.trim()) return;
+    
+    setIsRenaming(true);
+    try {
+      const success = await renameSavedSearch(selectedSavedSearchId, renameInput);
+      if (success) {
+        toast.success("Saved search renamed");
+        setRenameDialogOpen(false);
+      }
+    } catch (error) {
+      const err = error as { response?: { data?: { message?: string } } };
+      toast.error(err.response?.data?.message || "Failed to rename saved search");
+    } finally {
+      setIsRenaming(false);
+    }
+  };
+
+  const handleDeleteSubmit = async () => {
+    if (!selectedSavedSearchId) return;
+    
+    setIsDeleting(true);
+    try {
+      const success = await deleteSavedSearch(selectedSavedSearchId);
+      if (success) {
+        toast.success("Saved search deleted");
+        setDeleteDialogOpen(false);
+      }
+    } catch (error) {
+      const err = error as { response?: { data?: { message?: string } } };
+      toast.error(err.response?.data?.message || "Failed to delete saved search");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   return (
     <div className="flex md:hidden items-center p-4 border-b bg-background">
@@ -110,9 +167,102 @@ export function MobileNav() {
                 </nav>
               </div>
             )}
+            
+            {savedSearches.length > 0 && (
+              <div className="mt-4 mb-4">
+                <h4 className="mb-1 px-8 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                  Saved Searches
+                </h4>
+                <nav className="grid gap-1 px-4 text-sm font-medium">
+                  {savedSearches.map((search) => (
+                    <div key={search._id} className="relative group flex items-center">
+                      <button
+                        onClick={() => handleSavedSearchClick(search.query)}
+                        className={cn(
+                          buttonVariants({ variant: "ghost", size: "sm" }),
+                          "justify-start gap-3 flex-1 text-muted-foreground hover:bg-muted hover:text-foreground pr-8"
+                        )}
+                      >
+                        <Bookmark className="h-4 w-4 text-primary" />
+                        <span className="truncate">{search.name}</span>
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger className="absolute right-0 h-full px-2 opacity-100 hover:bg-transparent">
+                          <MoreVertical className="h-4 w-4 text-muted-foreground" />
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onClick={() => {
+                            setSelectedSavedSearchId(search._id);
+                            setRenameInput(search.name);
+                            setRenameDialogOpen(true);
+                          }}>
+                            <Edit2 className="mr-2 h-4 w-4" /> Rename
+                          </DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive focus:bg-destructive focus:text-destructive-foreground" onClick={() => {
+                            setSelectedSavedSearchId(search._id);
+                            setDeleteDialogOpen(true);
+                          }}>
+                            <Trash2 className="mr-2 h-4 w-4" /> Delete
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  ))}
+                </nav>
+              </div>
+            )}
           </div>
         </SheetContent>
       </Sheet>
+      
+      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Rename Saved Search</DialogTitle>
+          </DialogHeader>
+          <form onSubmit={handleRenameSubmit} className="space-y-4 pt-4">
+            <div className="space-y-2">
+              <Label htmlFor="mobileRenameSearch">Search Name</Label>
+              <Input
+                id="mobileRenameSearch"
+                value={renameInput}
+                onChange={(e) => setRenameInput(e.target.value)}
+                autoFocus
+                disabled={isRenaming}
+              />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setRenameDialogOpen(false)} disabled={isRenaming}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={isRenaming || !renameInput.trim()}>
+                {isRenaming ? "Saving..." : "Save"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle>Delete saved search?</DialogTitle>
+          </DialogHeader>
+          <div className="py-4">
+            <p className="text-sm text-muted-foreground">
+              Are you sure you want to delete this saved search? This action cannot be undone.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setDeleteDialogOpen(false)} disabled={isDeleting}>
+              Cancel
+            </Button>
+            <Button type="button" variant="destructive" onClick={handleDeleteSubmit} disabled={isDeleting}>
+              {isDeleting ? "Deleting..." : "Delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <Link href="/" className="flex items-center gap-2 font-semibold ml-4">
         <span className="text-lg tracking-tight">InboxIQ</span>
       </Link>

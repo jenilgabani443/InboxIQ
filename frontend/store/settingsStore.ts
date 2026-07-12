@@ -14,6 +14,7 @@ interface SettingsState {
   updatePreferences: (data: UserPreferences) => Promise<void>;
   updateSignature: (signature: string) => Promise<void>;
   updateVacation: (data: VacationResponder) => Promise<void>;
+  changePassword: (data: { currentPassword: string; newPassword: string }) => Promise<boolean>;
 }
 
 export const useSettingsStore = create<SettingsState>((set, get) => ({
@@ -99,6 +100,21 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     } catch (error: unknown) {
       const err = error as { response?: { data?: { message?: string } } };
       toast.error(err.response?.data?.message || "Failed to update vacation responder");
+    } finally {
+      set({ isSaving: false });
+    }
+  },
+
+  changePassword: async (data) => {
+    set({ isSaving: true });
+    try {
+      await userService.changePassword(data);
+      toast.success("Password changed successfully.");
+      return true;
+    } catch (error: unknown) {
+      const err = error as { response?: { data?: { message?: string } } };
+      toast.error(err.response?.data?.message || "Failed to change password");
+      return false;
     } finally {
       set({ isSaving: false });
     }
